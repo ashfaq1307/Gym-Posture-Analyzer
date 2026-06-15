@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Gym Posture Analyzer · AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet"/>
+
+<!-- MediaPipe suite -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+<style>
+/* ─── Reset & Variables ─────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#09090b;--panel:#141417;--card:#1c1c20;--border:#2a2a30;
+  --cyan:#22d3ee;--green:#4ade80;--amber:#fbbf24;--red:#f87171;
+  --dim:#52525b;--text:#e4e4e7;--sub:#a1a1aa;
+  --ff-head:'Barlow Condensed',sans-serif;
+  --ff-mono:'Share Tech Mono',monospace;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--ff-head);overflow:hidden}
+
+/* ─── Scanline texture ──────────────────────────────────────── */
+body::after{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:100;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.12) 2px,rgba(0,0,0,.12) 4px);
+}
+
+/* ─── Layout ────────────────────────────────────────────────── */
+.shell{display:grid;height:100vh;
+  grid-template-rows:56px 1fr 140px;
+  grid-template-columns:1fr 380px;
+  grid-template-areas:"hdr hdr""cam side""bars bars";
+  gap:0}
+
+/* ─── Header ───────────────────────────────────────────────── */
+header{
+  grid-area:hdr;background:var(--panel);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;
+}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-text{font-size:22px;font-weight:900;letter-spacing:3px;text-transform:uppercase;color:var(--cyan);
+  text-shadow:0 0 20px rgba(34,211,238,.4)}
+.logo-sub{font-size:11px;font-family:var(--ff-mono);color:var(--dim);letter-spacing:2px}
+.status-row{display:flex;align-items:center;gap:20px}
+.live-dot{width:9px;height:9px;border-radius:50%;background:var(--red);
+  animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.6)}50%{box-shadow:0 0 0 8px rgba(248,113,113,0)}}
+.live-dot.active{background:var(--green);animation-name:pulse-green}
+@keyframes pulse-green{0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,.6)}50%{box-shadow:0 0 0 8px rgba(74,222,128,0)}}
+.stat-chip{font-family:var(--ff-mono);font-size:11px;color:var(--sub);
+  background:var(--card);border:1px solid var(--border);border-radius:4px;padding:4px 10px;
+  display:flex;align-items:center;gap:6px}
+.stat-chip span{color:var(--cyan)}
+
+/* exercise selector */
+.ex-select{
+  font-family:var(--ff-mono);font-size:12px;background:var(--card);
+  border:1px solid var(--border);color:var(--text);padding:5px 10px;
+  border-radius:4px;cursor:pointer;outline:none;
+  appearance:none;-webkit-appearance:none}
+.ex-select option{background:var(--panel)}
+
+/* ─── Camera panel ──────────────────────────────────────────── */
+.cam-area{
+  grid-area:cam;position:relative;overflow:hidden;
+  background:#000;border-right:1px solid var(--border)}
+#inputVideo{position:absolute;width:100%;height:100%;object-fit:cover;opacity:0;pointer-events:none}
+#outputCanvas{position:absolute;width:100%;height:100%;object-fit:cover}
+
+/* corner brackets */
+.cam-area::before,.cam-area::after{
+  content:'';position:absolute;width:40px;height:40px;z-index:10;border-color:var(--cyan);border-style:solid}
+.cam-area::before{top:16px;left:16px;border-width:2px 0 0 2px}
+.cam-area::after{bottom:16px;right:16px;border-width:0 2px 2px 0}
+
+/* FPS + model badge */
+.cam-info{
+  position:absolute;bottom:16px;left:16px;z-index:10;
+  display:flex;flex-direction:column;gap:6px}
+.cam-badge{font-family:var(--ff-mono);font-size:10px;
+  background:rgba(9,9,11,.8);border:1px solid var(--border);
+  border-radius:3px;padding:3px 8px;color:var(--sub)}
+.cam-badge .hi{color:var(--cyan)}
+
+/* Posture status overlay on camera */
+.posture-overlay{
+  position:absolute;top:16px;right:16px;z-index:15;
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:16px 24px;background:rgba(9,9,11,.85);
+  border:2px solid var(--border);border-radius:8px;
+  backdrop-filter:blur(8px);transition:border-color .3s,box-shadow .3s}
+.posture-overlay.good{border-color:var(--green);box-shadow:0 0 20px rgba(74,222,128,.25)}
+.posture-overlay.medium{border-color:var(--amber);box-shadow:0 0 20px rgba(251,191,36,.25)}
+.posture-overlay.bad{border-color:var(--red);box-shadow:0 0 20px rgba(248,113,113,.25)}
+.posture-status-icon{
+  font-size:48px;font-weight:900;line-height:1;
+  text-shadow:0 0 20px currentColor}
+.posture-overlay.good .posture-status-icon{color:var(--green)}
+.posture-overlay.medium .posture-status-icon{color:var(--amber)}
+.posture-overlay.bad .posture-status-icon{color:var(--red)}
+.posture-status-text{
+  font-family:var(--ff-head);font-size:16px;font-weight:900;
+  letter-spacing:3px;text-transform:uppercase;color:var(--text)}
+
+/* start overlay */
+#startOverlay{
+  position:absolute;inset:0;z-index:20;
+  background:rgba(9,9,11,.88);display:flex;
+  flex-direction:column;align-items:center;justify-content:center;gap:20px;
+  backdrop-filter:blur(4px)}
+#startOverlay h2{font-size:28px;font-weight:900;letter-spacing:4px;text-transform:uppercase;color:var(--cyan)}
+#startOverlay p{font-family:var(--ff-mono);font-size:12px;color:var(--sub);text-align:center;line-height:1.8}
+.btn-start{
+  font-family:var(--ff-head);font-size:18px;font-weight:700;letter-spacing:3px;
+  text-transform:uppercase;background:transparent;
+  border:2px solid var(--cyan);color:var(--cyan);
+  padding:12px 36px;cursor:pointer;border-radius:2px;
+  transition:all .2s;position:relative;overflow:hidden}
+.btn-start::before{content:'';position:absolute;inset:0;background:var(--cyan);
+  transform:scaleX(0);transform-origin:left;transition:transform .25s;z-index:-1}
+.btn-start:hover{color:var(--bg)}
+.btn-start:hover::before{transform:scaleX(1)}
+
+/* ─── Side panel ────────────────────────────────────────────── */
+.side{grid-area:side;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;
+  scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px 16px}
+.card-title{font-size:10px;font-weight:600;letter-spacing:3px;text-transform:uppercase;
+  color:var(--dim);margin-bottom:10px}
+
+/* Exercise card */
+.ex-name{font-size:32px;font-weight:900;letter-spacing:2px;text-transform:uppercase;
+  color:var(--cyan);text-shadow:0 0 16px rgba(34,211,238,.3);line-height:1}
+.conf-row{display:flex;align-items:center;gap:10px;margin-top:8px}
+.conf-bar-wrap{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.conf-bar{height:100%;background:var(--cyan);border-radius:2px;transition:width .4s;width:0}
+.conf-val{font-family:var(--ff-mono);font-size:12px;color:var(--cyan);min-width:40px}
+
+/* Uncertainty badge */
+.uncert-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.uncert-label{font-family:var(--ff-mono);font-size:10px;color:var(--sub)}
+.uncert-val{font-family:var(--ff-mono);font-size:11px;padding:2px 8px;border-radius:3px;
+  background:rgba(74,222,128,.12);color:var(--green);border:1px solid rgba(74,222,128,.3)}
+.uncert-val.high{background:rgba(251,191,36,.12);color:var(--amber);border-color:rgba(251,191,36,.3)}
+
+/* Model badge */
+.model-badge{font-family:var(--ff-mono);font-size:9px;
+  display:inline-block;padding:2px 7px;border-radius:2px;
+  background:rgba(34,211,238,.08);color:var(--cyan);border:1px solid rgba(34,211,238,.2);
+  margin-top:4px}
+
+/* Posture gauge */
+.gauge-wrap{display:flex;flex-direction:column;align-items:center;gap:6px}
+.gauge-svg{width:200px;height:120px}
+.gauge-score{font-size:42px;font-weight:900;fill:var(--text);font-family:'Barlow Condensed',sans-serif}
+.gauge-label{font-size:10px;fill:var(--dim);font-family:'Share Tech Mono',monospace}
+
+.ci-row{font-family:var(--ff-mono);font-size:10px;color:var(--sub);text-align:center}
+.ci-row span{color:var(--amber)}
+
+/* Posture rating badge */
+.posture-rating{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  margin-top:8px}
+.rating-badge{
+  font-family:var(--ff-head);font-size:22px;font-weight:900;
+  letter-spacing:4px;text-transform:uppercase;
+  padding:6px 20px;border-radius:4px;border:2px solid;
+  transition:all .4s}
+.rating-badge.good{
+  color:var(--green);border-color:var(--green);
+  background:rgba(74,222,128,.08);
+  text-shadow:0 0 16px rgba(74,222,128,.5);
+  box-shadow:0 0 12px rgba(74,222,128,.15)}
+.rating-badge.medium{
+  color:var(--amber);border-color:var(--amber);
+  background:rgba(251,191,36,.08);
+  text-shadow:0 0 16px rgba(251,191,36,.5);
+  box-shadow:0 0 12px rgba(251,191,36,.15)}
+.rating-badge.bad{
+  color:var(--red);border-color:var(--red);
+  background:rgba(248,113,113,.08);
+  text-shadow:0 0 16px rgba(248,113,113,.5);
+  box-shadow:0 0 12px rgba(248,113,113,.15)}
+.rating-icon{font-size:18px}
+
+/* Enhanced joint rows */
+.joint-range{
+  font-size:8px;font-family:var(--ff-mono);color:var(--dim);margin-top:2px}
+.joint-dev{
+  font-family:var(--ff-mono);font-size:9px;
+  color:var(--red);margin-top:2px;font-weight:700}
+.joint-val-wrap{display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0}
+
+/* Joint check cards */
+.joint-list{display:flex;flex-direction:column;gap:6px}
+.joint-row{
+  display:grid;grid-template-columns:auto 1fr auto;
+  align-items:center;gap:10px;
+  padding:8px 10px;border-radius:4px;
+  background:var(--panel);border:1px solid var(--border);transition:border-color .3s}
+.joint-row.ok{border-color:rgba(74,222,128,.4)}
+.joint-row.fail{border-color:rgba(248,113,113,.4)}
+.joint-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.joint-dot.ok{background:var(--green)}
+.joint-dot.fail{background:var(--red)}
+.joint-info{min-width:0}
+.joint-name{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+.joint-tip{font-size:9px;font-family:var(--ff-mono);color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.joint-val{font-family:var(--ff-mono);font-size:13px;text-align:right;flex-shrink:0}
+.joint-val.ok{color:var(--green)}
+.joint-val.fail{color:var(--red)}
+
+/* ─── Bottom angle bars ─────────────────────────────────────── */
+.bars-area{
+  grid-area:bars;background:var(--panel);border-top:1px solid var(--border);
+  padding:12px 20px;display:flex;align-items:center;gap:4px}
+.angle-col{flex:1;display:flex;flex-direction:column;gap:5px;padding:0 6px;
+  border-right:1px solid var(--border)}
+.angle-col:last-child{border-right:none}
+.ang-label{font-size:9px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--dim)}
+.ang-val{font-family:var(--ff-mono);font-size:18px;color:var(--text)}
+.ang-deg{font-size:11px;color:var(--dim)}
+.ang-bar-wrap{height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+.ang-bar{height:100%;border-radius:2px;transition:width .25s,background .25s;background:var(--cyan)}
+
+/* ─── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ── Header ──────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div>
+        <div class="logo-text">⚡ Posture</div>
+        <div class="logo-sub">BNN · CNN · BILSTM · MULTI-TASK</div>
+      </div>
+    </div>
+    <div class="status-row">
+      <span class="stat-chip"><span id="fpsVal">0</span> FPS</span>
+      <span class="stat-chip">RF acc <span>95.76%</span></span>
+      <span class="stat-chip">MC passes <span>30</span></span>
+      <select class="ex-select" id="exSelect">
+        <option value="">Auto-detect</option>
+        <option>Squats</option>
+        <option>Push Ups</option>
+        <option>Pull ups</option>
+        <option>Jumping Jacks</option>
+        <option>Russian twists</option>
+      </select>
+      <div class="live-dot" id="liveDot"></div>
+    </div>
+  </header>
+
+  <!-- ── Camera ──────────────────────────────────────────────── -->
+  <div class="cam-area">
+    <video id="inputVideo" playsinline></video>
+    <canvas id="outputCanvas"></canvas>
+
+    <!-- Posture status overlay on camera -->
+    <div id="postureOverlay" class="posture-overlay">
+      <div class="posture-status-icon" id="postureStatusIcon">?</div>
+      <div class="posture-status-text" id="postureStatusText">WAITING</div>
+    </div>
+
+    <div class="cam-info">
+      <div class="cam-badge" id="modelBadge">MODEL — waiting…</div>
+      <div class="cam-badge" id="seqBadge">SEQ 0/10</div>
+    </div>
+
+    <!-- Start overlay -->
+    <div id="startOverlay">
+      <h2>Posture AI</h2>
+      <p>Real-time exercise classification<br>Bayesian uncertainty · Multi-task scoring<br>Powered by MediaPipe Pose + CNN-BiLSTM</p>
+      <button class="btn-start" id="btnStart">ACTIVATE CAMERA</button>
+    </div>
+  </div>
+
+  <!-- ── Side panel ───────────────────────────────────────────── -->
+  <div class="side">
+
+    <!-- Model Accuracy Card -->
+    <div class="card">
+      <div class="card-title">Model Performance</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:10px;text-align:center">
+          <div style="font-family:var(--ff-mono);font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px">RF Accuracy</div>
+          <div style="font-size:28px;font-weight:900;color:var(--cyan);text-shadow:0 0 16px rgba(34,211,238,.4)" id="rfAccVal">—</div>
+        </div>
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:10px;text-align:center">
+          <div style="font-family:var(--ff-mono);font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px">BNN Accuracy</div>
+          <div style="font-size:28px;font-weight:900;color:var(--green);text-shadow:0 0 16px rgba(74,222,128,.4)" id="bnnAccVal">—</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center">
+          <div style="font-family:var(--ff-mono);font-size:8px;color:var(--dim)">CV Mean</div>
+          <div style="font-size:16px;font-weight:700;color:var(--text)" id="cvAccVal">—</div>
+        </div>
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center">
+          <div style="font-family:var(--ff-mono);font-size:8px;color:var(--dim)">Train Samples</div>
+          <div style="font-size:16px;font-weight:700;color:var(--text)" id="trainSamplesVal">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exercise -->
+    <div class="card">
+      <div class="card-title">Exercise Detected</div>
+      <div class="ex-name" id="exName">—</div>
+      <div class="conf-row">
+        <div class="conf-bar-wrap"><div class="conf-bar" id="confBar"></div></div>
+        <div class="conf-val" id="confVal">—</div>
+      </div>
+      <div class="uncert-row">
+        <span class="uncert-label">σ uncertainty</span>
+        <span class="uncert-val" id="uncertBadge">—</span>
+      </div>
+      <div class="model-badge" id="modelLabel">RF mode</div>
+    </div>
+
+    <!-- Posture gauge -->
+    <div class="card">
+      <div class="card-title">Posture Score</div>
+      <div class="gauge-wrap">
+        <!-- Rating badge moved to top for visibility -->
+        <div class="posture-rating" style="margin-bottom: 8px;">
+          <div class="rating-badge" id="ratingBadge">WAITING</div>
+        </div>
+        <svg class="gauge-svg" viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg">
+          <!-- bg arc -->
+          <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#2a2a30" stroke-width="14" stroke-linecap="round"/>
+          <!-- colored arc -->
+          <path id="gaugeArc" d="M 20 100 A 80 80 0 0 1 20 100" fill="none" stroke="#22d3ee" stroke-width="14" stroke-linecap="round" style="transition:d .5s,stroke .5s"/>
+          <text id="gaugeScore" class="gauge-score" x="100" y="94" text-anchor="middle">—</text>
+          <text class="gauge-label" x="100" y="112" text-anchor="middle">/ 100</text>
+          <text class="gauge-label" x="20" y="116" text-anchor="middle">0</text>
+          <text class="gauge-label" x="180" y="116" text-anchor="middle">100</text>
+        </svg>
+        <div class="ci-row" id="ciRow">BNN interval: <span>—</span></div>
+      </div>
+    </div>
+
+    <!-- Joint checks -->
+    <div class="card">
+      <div class="card-title">Joint Analysis</div>
+      <div class="joint-list" id="jointList">
+        <div style="font-family:var(--ff-mono);font-size:11px;color:var(--dim)">Waiting for pose…</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Angle bars ────────────────────────────────────────────── -->
+  <div class="bars-area">
+    <div class="angle-col">
+      <div class="ang-label">Shoulder</div>
+      <div><span class="ang-val" id="angShoulder">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barShoulder" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Elbow</div>
+      <div><span class="ang-val" id="angElbow">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barElbow" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Hip</div>
+      <div><span class="ang-val" id="angHip">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barHip" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Knee</div>
+      <div><span class="ang-val" id="angKnee">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barKnee" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Ankle</div>
+      <div><span class="ang-val" id="angAnkle">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barAnkle" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Sh.Ground</div>
+      <div><span class="ang-val" id="angShG">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barShG" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Hip.Ground</div>
+      <div><span class="ang-val" id="angHipG">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barHipG" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Knee.Ground</div>
+      <div><span class="ang-val" id="angKneeG">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barKneeG" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Elbow.Ground</div>
+      <div><span class="ang-val" id="angElbG">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barElbG" style="width:0"></div></div>
+    </div>
+    <div class="angle-col">
+      <div class="ang-label">Ankle.Ground</div>
+      <div><span class="ang-val" id="angAnkG">—</span><span class="ang-deg">°</span></div>
+      <div class="ang-bar-wrap"><div class="ang-bar" id="barAnkG" style="width:0"></div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ================================================================
+   POSTURE AI  —  Camera + MediaPipe + BNN Inference
+   ================================================================ */
+
+const SEQ_LEN    = 10;
+const API_MS     = 1000;      // API call interval (ms)
+const MC_DRAW_N  = 30;
+
+// Feature names matching backend (feat_names.pkl order)
+// We build them dynamically — backend tells us order via /api/metadata
+let FEAT_NAMES = [
+  "Shoulder_Angle","Elbow_Angle","Hip_Angle","Knee_Angle","Ankle_Angle",
+  "Shoulder_Ground_Angle","Elbow_Ground_Angle","Hip_Ground_Angle",
+  "Knee_Ground_Angle","Ankle_Ground_Angle",
+  "shoulder_elbow_ratio","hip_knee_ratio","full_body_angle_sum",
+  "upper_body_diff","lower_body_diff"
+];
+
+// ── DOM refs ───────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const video       = $('inputVideo');
+const canvas      = $('outputCanvas');
+const ctx         = canvas.getContext('2d');
+const startOverlay= $('startOverlay');
+const liveDot     = $('liveDot');
+const fpsVal      = $('fpsVal');
+const exName      = $('exName');
+const confBar     = $('confBar');
+const confVal     = $('confVal');
+const uncertBadge = $('uncertBadge');
+const modelLabel  = $('modelLabel');
+const gaugeArc    = $('gaugeArc');
+const gaugeScore  = $('gaugeScore');
+const ciRow       = $('ciRow');
+const ratingBadge = $('ratingBadge');
+const jointList   = $('jointList');
+const exSelect    = $('exSelect');
+const modelBadge  = $('modelBadge');
+const seqBadge    = $('seqBadge');
+// Posture overlay on camera
+const postureOverlay = $('postureOverlay');
+const postureStatusIcon = $('postureStatusIcon');
+const postureStatusText = $('postureStatusText');
+
+// ── State ──────────────────────────────────────────────────────
+let angleBuffer   = [];        // circular seq buffer
+let lastApiCall   = 0;
+let frameCount    = 0;
+let lastFpsTime   = performance.now();
+let lastAngles    = null;
+let bnnAvailable  = false;
+let lastJointChecks = {};     // joint name → ok boolean for canvas coloring
+
+// ── Fetch feature name order + BNN status ─────────────────────
+fetch('/api/metadata').then(r => r.json()).then(meta => {
+  if (meta.rf_model?.all_features) {
+    FEAT_NAMES = meta.rf_model.all_features;
+  }
+  bnnAvailable = meta.bnn_available;
+  modelBadge.textContent = bnnAvailable
+    ? `BNN · CNN · BiLSTM  val=${(meta.bnn_model?.val_accuracy_mc*100||0).toFixed(1)}%`
+    : 'RF mode (run train_advanced_model.py for BNN)';
+
+  // Populate Model Performance card
+  $('rfAccVal').textContent = meta.accuracy ? `${(meta.accuracy*100).toFixed(2)}%` : '—';
+  $('bnnAccVal').textContent = meta.bnn_model?.val_accuracy_mc
+    ? `${(meta.bnn_model.val_accuracy_mc*100).toFixed(2)}%`
+    : '—';
+  $('cvAccVal').textContent = meta.cv_mean ? `${(meta.cv_mean*100).toFixed(2)}%` : '—';
+  $('trainSamplesVal').textContent = meta.train_samples ? meta.train_samples.toLocaleString() : '—';
+}).catch(() => {});
+
+// ── Angle math ─────────────────────────────────────────────────
+/**
+ * Angle at vertex B formed by A-B-C (0°–180°)
+ * Points are {x,y} in normalised [0,1] coords
+ */
+function angleBetween(A, B, C) {
+  const ax = A.x - B.x, ay = A.y - B.y;
+  const cx = C.x - B.x, cy = C.y - B.y;
+  const dot = ax*cx + ay*cy;
+  const mag = Math.sqrt(ax*ax + ay*ay) * Math.sqrt(cx*cx + cy*cy);
+  if (mag < 1e-8) return 0;
+  return Math.acos(Math.min(1, Math.max(-1, dot/mag))) * 180 / Math.PI;
+}
+
+/**
+ * Angle of segment p1→p2 with the ground horizontal (screen x-axis).
+ * Returns 0°–90° (acute angle with horizontal).
+ */
+function groundAngle(p1, p2) {
+  const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  return Math.abs(Math.atan2(Math.abs(dy), Math.abs(dx)) * 180 / Math.PI);
+}
+
+/** Average of two angles (left + right body) */
+const avg = (a, b) => (a + b) / 2;
+
+/**
+ * Extract all 10 angles from MediaPipe landmarks.
+ * Uses RIGHT side as primary; averages where sensible.
+ * Landmark indices:
+ *   11=L_shoulder  12=R_shoulder
+ *   13=L_elbow     14=R_elbow
+ *   15=L_wrist     16=R_wrist
+ *   23=L_hip       24=R_hip
+ *   25=L_knee      26=R_knee
+ *   27=L_ankle     28=R_ankle
+ *   29=L_heel      30=R_heel
+ *   31=L_foot      32=R_foot
+ */
+function extractAngles(lm) {
+  // Joints — use average of left and right for robustness
+  const SA = avg(
+    angleBetween(lm[13], lm[11], lm[23]),   // L: elbow-shoulder-hip
+    angleBetween(lm[14], lm[12], lm[24])    // R: elbow-shoulder-hip
+  );
+  const EA = avg(
+    angleBetween(lm[11], lm[13], lm[15]),   // L: shoulder-elbow-wrist
+    angleBetween(lm[12], lm[14], lm[16])    // R
+  );
+  const HA = avg(
+    angleBetween(lm[11], lm[23], lm[25]),   // L: shoulder-hip-knee
+    angleBetween(lm[12], lm[24], lm[26])    // R
+  );
+  const KA = avg(
+    angleBetween(lm[23], lm[25], lm[27]),   // L: hip-knee-ankle
+    angleBetween(lm[24], lm[26], lm[28])    // R
+  );
+  const AnkA = avg(
+    angleBetween(lm[25], lm[27], lm[31]),   // L: knee-ankle-foot
+    angleBetween(lm[26], lm[28], lm[32])    // R
+  );
+
+  // Ground angles
+  const ShGA = avg(
+    groundAngle(lm[11], lm[13]),   // L upper arm
+    groundAngle(lm[12], lm[14])    // R upper arm
+  );
+  const ElGA = avg(
+    groundAngle(lm[13], lm[15]),
+    groundAngle(lm[14], lm[16])
+  );
+  const HiGA = avg(
+    groundAngle(lm[23], lm[25]),
+    groundAngle(lm[24], lm[26])
+  );
+  const KnGA = avg(
+    groundAngle(lm[25], lm[27]),
+    groundAngle(lm[26], lm[28])
+  );
+  const AnGA = avg(
+    groundAngle(lm[27], lm[31]),
+    groundAngle(lm[28], lm[32])
+  );
+
+  return {
+    Shoulder_Angle: SA,      Elbow_Angle:    EA,
+    Hip_Angle:      HA,      Knee_Angle:     KA,
+    Ankle_Angle:    AnkA,
+    Shoulder_Ground_Angle: ShGA, Elbow_Ground_Angle: ElGA,
+    Hip_Ground_Angle:      HiGA, Knee_Ground_Angle:  KnGA,
+    Ankle_Ground_Angle:    AnGA,
+  };
+}
+
+/** Build 15-feature vector (mirrors backend build_features) */
+function buildFeatureVector(ang) {
+  const fa = {...ang};
+  fa.shoulder_elbow_ratio = fa.Shoulder_Angle / (fa.Elbow_Angle + 1);
+  fa.hip_knee_ratio       = fa.Hip_Angle      / (fa.Knee_Angle  + 1);
+  fa.full_body_angle_sum  = fa.Shoulder_Angle + fa.Hip_Angle + fa.Knee_Angle;
+  fa.upper_body_diff      = Math.abs(fa.Shoulder_Angle - fa.Elbow_Angle);
+  fa.lower_body_diff      = Math.abs(fa.Hip_Angle      - fa.Knee_Angle);
+  return FEAT_NAMES.map(f => fa[f] ?? 0);
+}
+
+// ── Skeleton drawing ───────────────────────────────────────────
+// Colour groups for visual distinction
+const ARM_CONNS  = [[11,13],[13,15],[12,14],[14,16]];
+const CORE_CONNS = [[11,12],[23,24],[11,23],[12,24]];
+const LEG_CONNS  = [[23,25],[25,27],[27,31],[24,26],[26,28],[28,32]];
+
+function drawSkeleton(landmarks) {
+  const W = canvas.width, H = canvas.height;
+
+  function drawLines(pairs, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 3;
+    ctx.shadowBlur  = 8;
+    ctx.shadowColor = color;
+    for (const [a,b] of pairs) {
+      const la = landmarks[a], lb = landmarks[b];
+      if (!la||!lb) continue;
+      if ((la.visibility??1) < 0.4 || (lb.visibility??1) < 0.4) continue;
+      ctx.beginPath();
+      ctx.moveTo(la.x*W, la.y*H);
+      ctx.lineTo(lb.x*W, lb.y*H);
+      ctx.stroke();
+    }
+  }
+
+  drawLines(ARM_CONNS,  '#22d3ee');
+  drawLines(CORE_CONNS, '#fbbf24');
+  drawLines(LEG_CONNS,  '#4ade80');
+  ctx.shadowBlur = 0;
+
+  // Joints
+  for (const lm of landmarks) {
+    if (!lm||(lm.visibility??1)<0.4) continue;
+    ctx.fillStyle   = '#f87171';
+    ctx.shadowBlur  = 6;
+    ctx.shadowColor = '#f87171';
+    ctx.beginPath();
+    ctx.arc(lm.x*W, lm.y*H, 5, 0, 2*Math.PI);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+}
+
+/** Draw angle value next to a landmark */
+function drawAngleLabel(lm, text, offsetX=10, offsetY=-8, color='rgba(34,211,238,0.95)') {
+  const W = canvas.width, H = canvas.height;
+  ctx.font      = 'bold 13px "Share Tech Mono"';
+  ctx.fillStyle = color;
+  ctx.shadowBlur  = 4;
+  ctx.shadowColor = color;
+  ctx.fillText(text, lm.x*W + offsetX, lm.y*H + offsetY);
+  ctx.shadowBlur = 0;
+}
+
+function jointColor(jointName) {
+  if (!(jointName in lastJointChecks)) return 'rgba(34,211,238,0.95)'; // cyan = no rule yet
+  return lastJointChecks[jointName] ? 'rgba(74,222,128,0.95)' : 'rgba(248,113,113,0.95)';
+}
+
+function overlayAngles(lm, ang) {
+  if (!lm) return;
+  const a = ang;
+  // Use right-side landmarks for label positions; color by joint rule status
+  drawAngleLabel(lm[12], `${a.Shoulder_Angle.toFixed(0)}°`, 8, -8, jointColor('Shoulder_Angle'));
+  drawAngleLabel(lm[14], `${a.Elbow_Angle.toFixed(0)}°`,    8, -8, jointColor('Elbow_Angle'));
+  drawAngleLabel(lm[24], `${a.Hip_Angle.toFixed(0)}°`,      8, -8, jointColor('Hip_Angle'));
+  drawAngleLabel(lm[26], `${a.Knee_Angle.toFixed(0)}°`,     8, -8, jointColor('Knee_Angle'));
+  drawAngleLabel(lm[28], `${a.Ankle_Angle.toFixed(0)}°`,    8, -8, jointColor('Ankle_Angle'));
+}
+
+// ── Gauge update ───────────────────────────────────────────────
+function updateGauge(score, colorHex) {
+  const pct   = Math.min(100, Math.max(0, score)) / 100;
+  const cx=100, cy=100, r=80;
+  const startAngle = Math.PI;
+  const endAngle   = Math.PI + pct * Math.PI;
+  const ex = cx + r * Math.cos(endAngle);
+  const ey = cy + r * Math.sin(endAngle);
+  const largeArc = pct > 0.5 ? 1 : 0;
+  const d = pct < 0.01
+    ? `M 20 100 A 80 80 0 0 1 20.01 100`
+    : `M 20 100 A 80 80 0 ${largeArc} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
+  gaugeArc.setAttribute('d', d);
+  const col = score >= 75 ? '#4ade80' : score >= 50 ? '#fbbf24' : '#f87171';
+  gaugeArc.setAttribute('stroke', col);
+  gaugeScore.textContent = Math.round(score);
+  gaugeScore.setAttribute('fill', col);
+}
+
+function updateRatingBadge(score, rating) {
+  if (!ratingBadge) return;
+  // Handle null/undefined score
+  if (score == null || score <= 0) {
+    ratingBadge.textContent = '—';
+    ratingBadge.className = 'rating-badge';
+    return;
+  }
+  const r = rating || (score >= 75 ? 'GOOD' : score >= 50 ? 'MEDIUM' : 'BAD');
+  const icons = {GOOD:'✓', MEDIUM:'△', BAD:'✕'};
+  const cls   = r.toLowerCase();
+  ratingBadge.textContent = `${icons[r]} ${r}`;
+  ratingBadge.className   = `rating-badge ${cls}`;
+}
+
+function updatePostureOverlay(score, rating) {
+  if (!postureOverlay || !postureStatusIcon || !postureStatusText) return;
+  if (score == null || score <= 0) {
+    postureOverlay.className = 'posture-overlay';
+    postureStatusIcon.textContent = '?';
+    postureStatusText.textContent = 'WAITING';
+    return;
+  }
+  const r = rating || (score >= 75 ? 'GOOD' : score >= 50 ? 'MEDIUM' : 'BAD');
+  const icons = {GOOD:'✓', MEDIUM:'△', BAD:'✕'};
+  postureOverlay.className = 'posture-overlay ' + r.toLowerCase();
+  postureStatusIcon.textContent = icons[r] || '?';
+  postureStatusText.textContent = r;
+}
+
+// ── UI update ──────────────────────────────────────────────────
+function updateUI(data) {
+  if (!data) return;
+
+  const exercise = data.active_exercise || '—';
+  exName.textContent = exercise;
+
+  // Confidence + bar
+  const bnn  = data.bnn;
+  const conf = bnn ? bnn.confidence : (data.rf?.confidence ?? 0);
+  confBar.style.width = `${(conf*100).toFixed(1)}%`;
+  confVal.textContent = `${(conf*100).toFixed(1)}%`;
+
+  // Model label
+  modelLabel.textContent = data.model || 'RF';
+  modelLabel.style.color = bnn ? 'var(--cyan)' : 'var(--amber)';
+
+  // Uncertainty badge
+  if (bnn) {
+    const std = bnn.uncertainty_std ?? 0;
+    uncertBadge.textContent = `σ ${(std*100).toFixed(1)}%`;
+    uncertBadge.className   = 'uncert-val' + (bnn.high_uncertainty ? ' high' : '');
+  } else {
+    uncertBadge.textContent = 'RF (no σ)';
+    uncertBadge.className   = 'uncert-val high';
+  }
+
+  // Posture gauge
+  const score = data.posture?.score ?? 0;
+  const rating = data.posture?.rating ?? null;
+  updateGauge(score);
+  updateRatingBadge(score, rating);
+  updatePostureOverlay(score, rating);
+
+  // BNN posture CI
+  if (bnn?.posture_ci_95) {
+    const [lo, hi] = bnn.posture_ci_95;
+    ciRow.innerHTML = `BNN 95% CI: <span>[${lo.toFixed(0)}, ${hi.toFixed(0)}]</span>`;
+  } else if (bnn?.posture_score_nn != null) {
+    ciRow.innerHTML = `BNN score: <span>${bnn.posture_score_nn.toFixed(1)}</span>`;
+  } else {
+    ciRow.innerHTML = 'BNN interval: <span>—</span>';
+  }
+
+  // Joint checks
+  const checks = data.posture?.checks ?? [];
+  // Store for canvas overlay coloring
+  lastJointChecks = {};
+  for (const c of checks) lastJointChecks[c.joint] = c.ok;
+  if (checks.length === 0) {
+    jointList.innerHTML = '<div style="font-family:var(--ff-mono);font-size:11px;color:var(--dim)">No rules for this exercise.</div>';
+    return;
+  }
+  jointList.innerHTML = checks.map(c => {
+    const rangeText = (c.min != null && c.max != null)
+      ? `Target: ${c.min}°–${c.max}°`
+      : '';
+    const devText = !c.ok && c.deviation > 0
+      ? `${c.deviation.toFixed(0)}° off target`
+      : '';
+    return `
+    <div class="joint-row ${c.ok?'ok':'fail'}">
+      <div class="joint-dot ${c.ok?'ok':'fail'}"></div>
+      <div class="joint-info">
+        <div class="joint-name">${c.joint.replace(/_/g,' ')}</div>
+        <div class="joint-tip">${c.tip}</div>
+        ${!c.ok && rangeText ? `<div class="joint-range">${rangeText}</div>` : ''}
+        ${devText ? `<div class="joint-dev">⚠ ${devText}</div>` : ''}
+      </div>
+      <div class="joint-val-wrap">
+        <div class="joint-val ${c.ok?'ok':'fail'}">${c.value.toFixed(0)}°</div>
+        ${c.ok ? `<div style="font-family:var(--ff-mono);font-size:8px;color:var(--green);text-align:right">✓ OK</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Angle bars update ──────────────────────────────────────────
+function updateBars(ang) {
+  const setBar = (valId, barId, val) => {
+    const el  = $(valId), bar = $(barId);
+    if (!el||!bar) return;
+    el.textContent = val.toFixed(0);
+    bar.style.width = `${Math.min(100,(val/180)*100)}%`;
+    const pct = val/180;
+    bar.style.background = pct < 0.33 ? 'var(--red)' : pct < 0.66 ? 'var(--amber)' : 'var(--cyan)';
+  };
+  setBar('angShoulder','barShoulder', ang.Shoulder_Angle);
+  setBar('angElbow',   'barElbow',   ang.Elbow_Angle);
+  setBar('angHip',     'barHip',     ang.Hip_Angle);
+  setBar('angKnee',    'barKnee',    ang.Knee_Angle);
+  setBar('angAnkle',   'barAnkle',   ang.Ankle_Angle);
+  setBar('angShG',     'barShG',     ang.Shoulder_Ground_Angle);
+  setBar('angHipG',    'barHipG',    ang.Hip_Ground_Angle);
+  setBar('angKneeG',   'barKneeG',   ang.Knee_Ground_Angle);
+  setBar('angElbG',    'barElbG',    ang.Elbow_Ground_Angle);
+  setBar('angAnkG',    'barAnkG',    ang.Ankle_Ground_Angle);
+}
+
+// ── API call ───────────────────────────────────────────────────
+async function callAPI(angles) {
+  const now = Date.now();
+  if (now - lastApiCall < API_MS) return;
+  lastApiCall = now;
+
+  const feats = buildFeatureVector(angles);
+
+  // Maintain rolling buffer
+  angleBuffer.push(feats);
+  if (angleBuffer.length > SEQ_LEN) angleBuffer.shift();
+  seqBadge.textContent = `SEQ ${angleBuffer.length}/${SEQ_LEN}`;
+
+  const overrideEx = exSelect.value || null;
+  const payload = {
+    angles,
+    sequence: [...angleBuffer],
+    exercise: overrideEx,
+  };
+
+  try {
+    const resp = await fetch('/api/analyze_advanced', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    updateUI(data);
+  } catch(e) {
+    // fallback to /api/analyze (RF-only)
+    try {
+      const resp = await fetch('/api/analyze', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({angles, exercise: overrideEx})
+      });
+      const data = await resp.json();
+      // wrap into expected shape
+      updateUI({
+        active_exercise: data.active_exercise,
+        rf: {predicted_exercise: data.predicted_exercise, confidence: data.confidence},
+        bnn: null,
+        posture: data.posture,
+        model: data.model,
+      });
+    } catch(e2) {}
+  }
+}
+
+// ── MediaPipe Pose setup ───────────────────────────────────────
+let pose, camera;
+
+function initMediaPipe() {
+  pose = new Pose({
+    locateFile: file =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+
+  pose.setOptions({
+    modelComplexity:      1,
+    smoothLandmarks:      true,
+    enableSegmentation:   false,
+    smoothSegmentation:   false,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence:  0.55,
+  });
+
+  pose.onResults(onResults);
+}
+
+function onResults(results) {
+  // Resize canvas to match video
+  canvas.width  = video.videoWidth  || canvas.offsetWidth;
+  canvas.height = video.videoHeight || canvas.offsetHeight;
+
+  // Clear
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw mirrored video frame
+  ctx.save();
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  if (!results.poseLandmarks) return;
+
+  // Mirror landmarks for display
+  const lm = results.poseLandmarks.map(p => ({...p, x: 1 - p.x}));
+
+  // Draw skeleton
+  drawSkeleton(lm);
+
+  // Calculate angles
+  const ang = extractAngles(lm);
+  lastAngles = ang;
+
+  // Draw angle labels on canvas
+  overlayAngles(lm, ang);
+
+  // Update angle bars
+  updateBars(ang);
+
+  // FPS
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime > 1000) {
+    fpsVal.textContent = frameCount;
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+
+  // API inference
+  callAPI(ang);
+}
+
+// ── Start camera ───────────────────────────────────────────────
+async function startCamera() {
+  startOverlay.style.display = 'none';
+
+  initMediaPipe();
+
+  camera = new Camera(video, {
+    onFrame: async () => { await pose.send({image: video}); },
+    width:  1280,
+    height: 720,
+  });
+
+  await camera.start();
+  liveDot.classList.add('active');
+}
+
+$('btnStart').addEventListener('click', startCamera);
+
+// ── Keyboard shortcut: S = start ──────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 's' || e.key === 'S') startCamera();
+});
+</script>
+</body>
+</html>

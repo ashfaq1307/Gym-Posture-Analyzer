@@ -1,0 +1,98 @@
+{
+  "model_type": "Random Forest",
+  "accuracy": 0.9576,
+  "cv_mean": 0.9625,
+  "cv_std": 0.0011,
+  "classes": [
+    "Jumping Jacks",
+    "Pull ups",
+    "Push Ups",
+    "Russian twists",
+    "Squats"
+  ],
+  "feature_cols": [
+    "Shoulder_Angle",
+    "Elbow_Angle",
+    "Hip_Angle",
+    "Knee_Angle",
+    "Ankle_Angle",
+    "Shoulder_Ground_Angle",
+    "Elbow_Ground_Angle",
+    "Hip_Ground_Angle",
+    "Knee_Ground_Angle",
+    "Ankle_Ground_Angle"
+  ],
+  "all_features": [
+    "Shoulder_Angle",
+    "Elbow_Angle",
+    "Hip_Angle",
+    "Knee_Angle",
+    "Ankle_Angle",
+    "Shoulder_Ground_Angle",
+    "Elbow_Ground_Angle",
+    "Hip_Ground_Angle",
+    "Knee_Ground_Angle",
+    "Ankle_Ground_Angle",
+    "shoulder_elbow_ratio",
+    "hip_knee_ratio",
+    "full_body_angle_sum",
+    "upper_body_diff",
+    "lower_body_diff"
+  ],
+  "confusion_matrix": [
+    [
+      986,
+      34,
+      9,
+      0,
+      13
+    ],
+    [
+      9,
+      1270,
+      39,
+      3,
+      11
+    ],
+    [
+      3,
+      2,
+      1941,
+      0,
+      7
+    ],
+    [
+      0,
+      5,
+      17,
+      836,
+      23
+    ],
+    [
+      22,
+      34,
+      23,
+      9,
+      911
+    ]
+  ],
+  "feature_importances": {
+    "Ankle_Angle": 0.232053,
+    "full_body_angle_sum": 0.104768,
+    "hip_knee_ratio": 0.101997,
+    "Hip_Angle": 0.09289,
+    "upper_body_diff": 0.089219,
+    "Elbow_Angle": 0.070403,
+    "Shoulder_Angle": 0.069586,
+    "shoulder_elbow_ratio": 0.069573,
+    "Knee_Angle": 0.068778,
+    "lower_body_diff": 0.054153,
+    "Ankle_Ground_Angle": 0.024003,
+    "Hip_Ground_Angle": 0.011465,
+    "Knee_Ground_Angle": 0.009632,
+    "Elbow_Ground_Angle": 0.000931,
+    "Shoulder_Ground_Angle": 0.00055
+  },
+  "train_samples": 24826,
+  "test_samples": 6207
+}
