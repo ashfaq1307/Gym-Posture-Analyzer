@@ -260,3 +260,4 @@ GPU is supported for BNN training/inference. If CUDA is unavailable the model ru
 | 0–49 | BAD |
 
 Scores are computed by checking each joint angle against exercise-specific biomechanical ranges. Each joint check is weighted by its importance (e.g. knee tracking in squats has weight 3, ankle stability has weight 2).
+
